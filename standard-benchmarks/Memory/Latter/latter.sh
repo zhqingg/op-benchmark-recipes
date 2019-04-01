@@ -90,56 +90,65 @@ function StateLog {
  
 function LTlat_mem_rd {
     Log "Running tests..."
-
+    
     ulimit -d unlimited
     export MEMORY_AFFINITY=mcm
 
     # Store the current prefetch and SMT settings
     CURR_PREFETCH=`ppc64_cpu --dscr | sed 's/DSCR is //'`
-    CURR_SMT=`ppc64_cpu --smt | sed "s/SMT=//" | xargs`
+    CURR_SMT=`ppc64_cpu --smt | sed "s/SMT=//" | xargs` #"
+
+    # Turn SMT off and prefetch on for stream measurements # -- jjm021419
+    ppc64_cpu --smt=off
 
     for _PREFETCH in ${LTPREFETCH_SET}
     do
-        ppc64_cpu --dscr=${_PREFETCH}
-        if [ ! -d ${LTNAME_PREFETCH}.${_PREFETCH} ]
-        then
-            mkdir ${LTNAME_PREFETCH}.${_PREFETCH}
-        fi
-        cd ${LTNAME_PREFETCH}.${_PREFETCH}
+	ppc64_cpu --dscr=${_PREFETCH}
+	if [ ! -d ${LTNAME_PREFETCH}.${_PREFETCH} ]
+	then
+	    mkdir ${LTNAME_PREFETCH}.${_PREFETCH}
+	fi
+	cd ${LTNAME_PREFETCH}.${_PREFETCH}
 
-        _RUN=1
-        while (( ${_RUN} <= ${LTRUNS} ))
-        do
-            if [ ! -d  ${LTNAME_RUN}.${_RUN} ]
-            then
-                mkdir ${LTNAME_RUN}.${_RUN}
-            fi
+	_RUN=1
+	while (( ${_RUN} <= ${LTRUNS} ))
+	do
+	    if [ ! -d  ${LTNAME_RUN}.${_RUN} ]
+	    then
+		mkdir ${LTNAME_RUN}.${_RUN}
+	    fi
 
-            cd ${LTNAME_RUN}.${_RUN}
-            i=0
-
-            for _CHIP in ${LTCHIP_SET}
-            do
-                _ARGS="${LTITERS}i${LT_BUFSIZE} ${LT_STRIDESIZE} ${_CHIP} ${LTCHIP_SET}"
-                _OF1="${LTNAME_LAT}.${_CHIP}.${LTNAME_OUT}"
-
-                if [[ ${LTRUN_PMCOUNT} == "TRUE" ]]
-                then
-                    # do the run with perf if it was requested
-                    Log "${LTPMCMD} ${LTCMD} ${_ARGS}"
-                    _OF2="${LTNAME_LAT}.${_CHIP}.${LTNAME_PMCOUT}"
-                    numactl --m ${nodes[$i]} ${LTPMCMD} ${LTPATH}/${LTCMD} ${_ARGS} >> ${_OF2} 2>&1
-                else
-                    # Otherwise just do the run
-                    Log "${LTCMD} ${_ARGS}"
-                    numactl --m ${nodes[$i]} ${LTPATH}/${LTCMD} ${_ARGS} >> ${_OF1} 2>&1
-                fi
-                (( i += 1 ))
-            done
-            cd ..
-            (( _RUN += 1 ))
-        done
-        cd ..
+	    cd ${LTNAME_RUN}.${_RUN}
+	    
+	    #i=0
+	    for _NODE in ${LTNODE_SET}  # -- jjm021419
+	    do
+		#_ARGS="${LTITERS}i${LT_BUFSIZE} ${LT_STRIDESIZE} ${_CHIP} ${LTCHIP_SET}" # -- jjm021419
+		_ARGS="${LT_BUFSIZE} ${LT_STRIDESIZE}" 		# -- jjm021419
+		_OF1="${LTNAME_LAT}.${_NODE}.${LTNAME_OUT}"	# -- jjm021419
+	        _OF2="${LTNAME_LAT}.${_NODE}.${LTNAME_PMCOUT}"	# -- jjm021419
+	    
+	        for _CHIP in ${LTCHIP_SET} 
+		do
+		    if [[ ${LTRUN_PMCOUNT} == "TRUE" ]]
+		    then
+			# do the run with perf if it was requested
+			Log "numactl -m ${_NODE} -C ${_CHIP} ${LTPMCMD} ${LTCMD} ${_ARGS}"
+			echo "Running on CPU: ${_CHIP}" >> ${_OF2} 2>&1 # -- jjm021419
+			numactl -m ${_NODE} -C ${_CHIP} ${LTPMCMD} ${LTPATH}/${LTCMD} ${_ARGS} >> ${_OF2} 2>&1
+		    else
+			# Otherwise just do the run
+			Log "numactl -m ${_NODE} -C ${_CHIP} ${LTCMD} ${_ARGS}"
+			echo "Running on CPU: ${_CHIP}" >> ${_OF1} 2>&1 # -- jjm021419
+			numactl -m ${_NODE} -C ${_CHIP} ${LTPATH}/${LTCMD} ${_ARGS} >> ${_OF1} 2>&1
+		    fi
+		done
+                #(( i += 1 ))
+	    done
+	    cd ..
+	    (( _RUN += 1 ))
+	done
+	cd ..
     done
 
     # Test cache latencies (prefetch is always off for this)
@@ -148,14 +157,11 @@ function LTlat_mem_rd {
 
     for _CHIP in ${LTCHIP_SET}
     do
-        _ARGS="${LTPATH}/${LTCMD} 60 128 ${_CHIP}"
-        _OF3="${_CHIP}.cache.out"
-        Log "${_ARGS}"
-        ${_ARGS} >> ${_OF3} 2>&1
+	_ARGS="${LTPATH}/${LTCMD} 60 128" #${_CHIP}" -- jjm021419
+	_OF3="${_CHIP}.cache.out"
+	Log "numactl -C ${_CHIP} ${_ARGS}"
+	numactl -C ${_CHIP} ${_ARGS} >> ${_OF3} 2>&1
     done
-
-    # Turn SMT off and prefetch on for stream measurements
-    ppc64_cpu --smt=off
 
     # Measure STREAM results
     for _SRC_NODE in ${LTNODE_SET}
@@ -170,7 +176,7 @@ function LTlat_mem_rd {
             _OF4="${_SRC_NODE}.${_DST_NODE}.${STNAME_OUT}"
             export OMP_NUM_THREADS="${_CPU_NUM}"
             export GOMP_CPU_AFFINITY="${_CPU_SET}"
-            Log "numactl -m ${_SRC_NODE} ${LTPATH}/${STCMD}"
+            Log "(OMP_NUM_THREADS='${_CPU_NUM}' GOMP_CPU_AFFINITY='${_CPU_SET}') numactl -m ${_SRC_NODE} ${LTPATH}/${STCMD}"
             numactl -m ${_SRC_NODE} ${LTPATH}/${STCMD} >> ${_OF4} 2>&1
         done
     done
@@ -189,10 +195,10 @@ function LTlat_mem_rd {
         export GOMP_CPU_AFFINITY="${_SYS_CPU_SET}"
 
         _OF4="system.${STNAME_OUT}"
-        Log "${LTPATH}/${STCMD}"
+        Log "(OMP_NUM_THREADS='${_SYS_CPU_NUM}' GOMP_CPU_AFFINITY='${_SYS_CPU_SET}') ${LTPATH}/${STCMD}"
         ${LTPATH}/${STCMD} >> ${_OF4} 2>&1
     fi
-
+    
     #Restore prefetch and smt settings
     ppc64_cpu --smt=${CURR_SMT}
     ppc64_cpu --dscr=${CURR_PREFETCH}
